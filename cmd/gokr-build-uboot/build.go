@@ -52,16 +52,28 @@ func compile(ubootDir, rkbinDir string) error {
 		return fmt.Errorf("make defconfig: %v", err)
 	}
 
-	// Enable CONFIG_CMD_SETEXPR for boot.scr cmdline.txt loading
+	// Append config options:
+	// - CONFIG_BOOTMETH_SCRIPT: Enable boot.scr script boot method
+	// - CONFIG_CMD_SETEXPR: Enable setexpr command for boot.scr cmdline.txt loading
 	f, err := os.OpenFile(filepath.Join(ubootDir, ".config"), os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString("CONFIG_CMD_SETEXPR=y\nCONFIG_CMD_SETEXPR_FMT=y\n"); err != nil {
+	configOverlay := `
+CONFIG_BOOTMETH_SCRIPT=y
+CONFIG_CMD_SETEXPR=y
+CONFIG_CMD_SETEXPR_FMT=y
+`
+	if _, err := f.WriteString(configOverlay); err != nil {
 		f.Close()
 		return err
 	}
 	f.Close()
+
+	// Resolve config dependencies
+	if err := run(ubootDir, "make", "ARCH=arm64", "olddefconfig"); err != nil {
+		return fmt.Errorf("make olddefconfig: %v", err)
+	}
 
 	// Build U-Boot
 	cmd := exec.Command("make", "-j"+strconv.Itoa(runtime.NumCPU()))

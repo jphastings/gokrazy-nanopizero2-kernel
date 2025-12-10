@@ -230,7 +230,7 @@ file boot.scr
 
 > **Why:** We test the built artifacts by booting on real hardware.
 
-- [ ] **7.1** Identify SD card device
+- [x] **7.1** Identify SD card device
 
   ```bash
   # macOS
@@ -242,24 +242,11 @@ file boot.scr
 
   **Be very careful** - wrong device = data loss!
 
-- [ ] **7.2** Write U-Boot to SD card
+- [x] **7.2** Create boot partition
 
   ```bash
-  # Unmount first
-  diskutil unmountDisk /dev/diskX   # macOS
-  sudo umount /dev/sdX*             # Linux
-
-  # Write U-Boot at sector 64
-  sudo dd if=u-boot-rockchip.bin of=/dev/rdiskX seek=64 bs=512   # macOS
-  sudo dd if=u-boot-rockchip.bin of=/dev/sdX seek=64 bs=512      # Linux
-  sudo sync
-  ```
-
-- [ ] **7.3** Create boot partition
-
-  ```bash
-  # macOS (use Disk Utility or)
-  diskutil partitionDisk /dev/diskX GPT FAT32 BOOT 256MB "Free Space" 0
+  # macOS
+  diskutil partitionDisk /dev/diskX GPT FAT32 BOOT 0b
 
   # Linux
   sudo parted /dev/sdX --script mklabel gpt
@@ -267,14 +254,33 @@ file boot.scr
   sudo mkfs.vfat -F 32 /dev/sdX1
   ```
 
-- [ ] **7.4** Copy boot files
+- [x] **7.3** Write U-Boot to SD card
+
+  U-Boot is written to sector 64, which sits in the gap between the GPT header (sectors 0-33) and the first partition.
+
+  ```bash
+  # Unmount first
+  diskutil unmountDisk /dev/diskX   # macOS
+  sudo umount /dev/sdX*             # Linux
+
+  # Write U-Boot at sector 64
+
+  # macOS
+  sudo dd if=u-boot-rockchip.bin of=/dev/rdiskX seek=64 bs=512
+
+  # Linux
+  sudo dd if=u-boot-rockchip.bin of=/dev/sdX seek=64 bs=512
+  sudo sync
+  ```
+
+- [x] **7.4** Copy boot files
 
   ```bash
   # Mount boot partition
   # macOS: mounts automatically as /Volumes/BOOT
   # Linux: sudo mount /dev/sdX1 /mnt
 
-  cp vmlinuz /Volumes/BOOT/           # or /mnt/
+  cp vmlinuz /Volumes/BOOT/
   cp rk3528-nanopi-zero2.dtb /Volumes/BOOT/
   cp boot.scr /Volumes/BOOT/
   cp cmdline.txt /Volumes/BOOT/
@@ -288,15 +294,15 @@ file boot.scr
 
 ### 8. Boot Test
 
-- [ ] **8.1** Connect serial adapter and start terminal
+- [x] **8.1** Connect serial adapter and start terminal
 
   ```bash
   picocom -b 1500000 /dev/tty.usbserial-*
   ```
 
-- [ ] **8.2** Insert SD card and power on
+- [x] **8.2** Insert SD card and power on
 
-- [ ] **8.3** Watch for boot output
+- [x] **8.3** Watch for boot output
 
 #### Test: Expected Serial Output
 
@@ -362,14 +368,14 @@ The NanoPi Zero2 DTS targets kernel v6.18+. Options:
 
 ## Phase 1 Completion Criteria
 
-- [ ] Docker-based U-Boot build completes successfully
-- [ ] Docker-based kernel build completes successfully
-- [ ] All artifacts exist: `u-boot-rockchip.bin`, `boot.scr`, `vmlinuz`, `rk3528-nanopi-zero2.dtb`
-- [ ] Serial terminal connects at 1500000 baud
-- [ ] U-Boot boots and shows DDR/DRAM info
-- [ ] boot.scr correctly loads cmdline.txt
-- [ ] Kernel boots and shows "Machine model: FriendlyElec NanoPi Zero2"
-- [ ] Kernel panics with "Unable to mount root fs" (expected)
+- [x] Docker-based U-Boot build completes successfully
+- [x] Docker-based kernel build completes successfully
+- [x] All artifacts exist: `u-boot-rockchip.bin`, `boot.scr`, `vmlinuz`, `rk3528-nanopi-zero2.dtb`
+- [x] Serial terminal connects at 1500000 baud
+- [x] U-Boot boots and shows DDR/DRAM info
+- [x] boot.scr correctly loads cmdline.txt
+- [x] Kernel boots and shows "Machine model: FriendlyElec NanoPi Zero2"
+- [x] Kernel panics with "Unable to mount root fs" (expected)
 
 ---
 
