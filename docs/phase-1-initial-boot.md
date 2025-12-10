@@ -1,36 +1,66 @@
 # Phase 1: Development Environment & Initial Boot
 
-**Goal:** Achieve serial console boot on NanoPi Zero2 with mainline Linux kernel.
+**Goal:** Build U-Boot and kernel using Docker for reproducible builds, create the gokrazy package structure, and verify boot on hardware.
+
+This phase produces the same artifacts that will be checked into the repository - we build it correctly from the start using Docker, following the pattern established by [gokrazy-rock64-kernel](https://github.com/anupcshan/gokrazy-rock64-kernel).
 
 ## Prerequisites
 
 - NanoPi Zero2 board
 - MicroSD card (8GB+ recommended)
-- USB-to-TTL serial adapter (must support 1.5 Mbaud - see notes below)
-- Linux or macOS development machine
-- Dupont jumper wires (female-to-female for the debug header)
+- USB-to-TTL serial adapter (must support 1.5 Mbaud - see Section 1)
+- Docker or Podman installed
+- Go 1.21+ installed
+
+## Package Structure Overview
+
+By the end of Phase 1, the repository will contain:
+
+```text
+gokrazy-nanopizero2-kernel/
+├── cmd/
+│   ├── gokr-build-kernel/      # Kernel build logic (runs in container)
+│   │   ├── build.go
+│   │   └── config.txt          # Kernel config overlay
+│   ├── gokr-build-uboot/       # U-Boot build logic (runs in container)
+│   │   └── build.go
+│   ├── gokr-rebuild-kernel/    # Docker wrapper for kernel builds
+│   │   └── kernel.go
+│   └── gokr-rebuild-uboot/     # Docker wrapper for U-Boot builds
+│       └── uboot.go
+├── boot.cmd                    # U-Boot boot script source
+├── boot.scr                    # Compiled boot script (generated)
+├── cmdline.txt                 # Kernel command line (read at boot)
+├── config.txt                  # Boot config (may be empty for Rockchip)
+├── rk3528-nanopi-zero2.dtb     # Device tree blob (generated)
+├── u-boot-rockchip.bin         # U-Boot binary (generated)
+├── vmlinuz                     # Kernel image (generated)
+├── kernel.go                   # Empty Go package for import
+└── go.mod
+```
 
 ## Step-by-Step Checklist
 
 ### 1. Serial Adapter Setup
 
-> **Why:** The NanoPi Zero2 has no video output. The only way to see boot messages is via the debug UART at 1,500,000 baud (1.5 Mbps). Most cheap adapters max out at 115200 baud.
+> **Why:** The NanoPi Zero2 has no video output. Serial UART at 1,500,000 baud is the only way to see boot messages.
 
-- [ ] **1.1** Obtain a compatible USB-to-TTL adapter
+- [x] **1.1** Obtain a compatible USB-to-TTL adapter
 
   Recommended chipsets that support 1.5 Mbaud:
+
   - **FT232RL** (FTDI) - most reliable
   - **CP2104** (Silicon Labs)
   - **CH340G** - works but quality varies
 
   Avoid: PL2303-based adapters (many have baud rate limitations)
 
-- [ ] **1.2** Wire the adapter to the NanoPi Zero2 debug header
+- [x] **1.2** Wire the adapter to the NanoPi Zero2 debug header
 
   The NanoPi Zero2 has an **8-pin 2.54mm header**:
 
   ```text
-  Pin Layout (top view, USB-C facing down):
+  Pin Layout (USB-C & Ethernet facing north):
 
   [1] [2]     1 = GND          2 = 5V
   [3] [4]     3 = UART_TX      4 = 5V
@@ -48,373 +78,574 @@
 
   > **Important:** Do NOT connect 5V from the adapter. Power the board via USB-C.
 
-- [ ] **1.3** Install a serial terminal program
-
-  **Linux (Debian/Ubuntu):**
+- [x] **1.3** Install a serial terminal program
 
   ```bash
-  sudo apt install minicom
-  # or
+  # macOS
+  brew install picocom
+
+  # Linux
   sudo apt install picocom
   ```
 
-  **macOS:**
+- [x] **1.4** Test the serial connection
 
   ```bash
-  brew install minicom
-  # or
-  brew install picocom
+  picocom -b 1500000 /dev/tty.usbserial-*   # macOS
+  picocom -b 1500000 /dev/ttyUSB0           # Linux
   ```
 
-- [ ] **1.4** Configure and test the serial connection
-
-  Find your serial device:
-
-  ```bash
-  ls /dev/ttyUSB*   # Linux
-  ls /dev/tty.usbserial*   # macOS
-  ```
-
-  Connect with picocom (simpler):
-
-  ```bash
-  picocom -b 1500000 /dev/ttyUSB0
-  ```
-
-  Or minicom:
-  
-  ```bash
-  minicom -s
-  # Set: Serial Device = /dev/ttyUSB0
-  # Set: Bps/Par/Bits = 1500000 8N1
-  # Set: Hardware Flow Control = No
-  # Save setup as dfl, then exit
-  minicom
-  ```
-
-  > **Test:** With nothing connected, you should see a blank terminal. Characters you type won't echo (that's normal).
+  > With nothing connected, you should see a blank terminal. Characters you type won't echo (that's normal). Exit with `Ctrl-A Ctrl-X`.
 
 ---
 
-### 2. Install Cross-Compilation Toolchain
+### 2. Install Docker
 
-> **Why:** You're building ARM64 binaries on an x86_64 (or ARM Mac) machine. The cross-compiler produces code for a different CPU architecture than your host.
+> **Why:** Docker provides reproducible builds across different host systems. The cross-compiler and all dependencies are containerized.
 
-- [ ] **2.1** Install the ARM64 cross-compiler
-
-  **Debian/Ubuntu:**
+- [x] **2.1** Install Docker
 
   ```bash
-  sudo apt update
-  sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-  sudo apt install bison flex libssl-dev bc
+  # macOS
+  brew install --cask docker
+  # Then launch Docker.app
+
+  # Linux (Debian/Ubuntu)
+  sudo apt install docker.io
+  sudo usermod -aG docker $USER
+  # Log out and back in
   ```
 
-  **macOS (via Homebrew):**
+- [x] **2.2** Verify Docker works
 
   ```bash
-  brew install aarch64-elf-gcc
-  brew install bison flex openssl
-  # Note: macOS cross-compilation is trickier; a Linux VM is recommended
+  docker run --rm hello-world
   ```
-
-  **Fedora:**
-
-  ```bash
-  sudo dnf install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-  sudo dnf install bison flex openssl-devel bc
-  ```
-
-- [ ] **2.2** Verify the toolchain works
-
-  ```bash
-  aarch64-linux-gnu-gcc --version
-  ```
-
-  Expected output: version info for the cross-compiler (e.g., `aarch64-linux-gnu-gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0`)
 
 ---
 
-### 3. Build U-Boot Bootloader
+### 3. Create Build Tools
 
-> **Why:** Rockchip boards use U-Boot as the bootloader. It initializes hardware (DDR memory, storage) and loads the Linux kernel. The "idbloader" contains the DDR training code needed before U-Boot can run.
+> **Why:** We create Go programs that orchestrate Docker-based builds. This ensures anyone can rebuild the kernel with a single command.
 
-- [ ] **3.1** Create a workspace directory
+- [x] **3.1** Create the U-Boot build tool
 
-  ```bash
-  mkdir -p ~/nanopi-zero2-build
-  cd ~/nanopi-zero2-build
-  ```
+  Create `cmd/gokr-build-uboot/build.go`.
 
-- [ ] **3.2** Clone U-Boot and Rockchip binary blobs
+- [x] **3.2** Create the U-Boot rebuild wrapper
 
-  ```bash
-  git clone --depth 1 https://source.denx.de/u-boot/u-boot.git
-  git clone --depth 1 https://github.com/rockchip-linux/rkbin.git
-  ```
+  Create `cmd/gokr-rebuild-uboot/uboot.go`
 
-- [ ] **3.3** Set environment variables for RK3528 firmware
+- [x] **3.3** Create the boot script
 
-  ```bash
-  cd u-boot
-  export BL31=../rkbin/bin/rk35/rk3528_bl31_v1.18.elf
-  export ROCKCHIP_TPL=../rkbin/bin/rk35/rk3528_ddr_1056MHz_v1.10.bin
-  ```
+  Create `boot.cmd`
 
-  > **What are these?**
-  > - `BL31`: ARM Trusted Firmware (runs in secure mode, required for ARM64)
-  > - `ROCKCHIP_TPL`: DDR memory initialization code (proprietary binary)
+- [x] **3.4** Create cmdline.txt
 
-- [ ] **3.4** Configure U-Boot for RK3528
+  Create `cmdline.txt`
+
+- [x] **3.5** Create empty `config.txt`
+
+---
+
+### 4. Build U-Boot
+
+- [x] **4.1** Run the U-Boot build
 
   ```bash
-  make generic-rk3528_defconfig
+  go run ./cmd/gokr-rebuild-uboot
   ```
 
-  This creates `.config` with settings for generic RK3528 boards.
+  This will:
+  - Build a Docker container with cross-compilation tools
+  - Clone U-Boot and rkbin inside the container
+  - Compile U-Boot with RK3528 support
+  - Generate boot.scr from boot.cmd
+  - Output `u-boot-rockchip.bin` and `boot.scr`
 
-- [ ] **3.5** Build U-Boot
+- [x] **4.2** Verify outputs
 
   ```bash
-  make CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+  ls -lh u-boot-rockchip.bin boot.scr
+  # u-boot-rockchip.bin should be ~8 MB
+  # boot.scr should be ~1 KB
   ```
-
-  This takes 1-2 minutes. Watch for errors.
-
-- [ ] **3.6** Verify build output
-
-  ```bash
-  ls -la u-boot-rockchip.bin
-  ```
-
-  You should see a file around 1-2 MB. This contains:
-  - idbloader (TPL + SPL)
-  - U-Boot proper
-  - ATF (ARM Trusted Firmware)
 
 #### Test: U-Boot Build Verification
 
 ```bash
-# Check the binary was created
 file u-boot-rockchip.bin
-# Expected: "data" or similar (it's a raw binary)
+# Expected: "data" (raw binary)
 
-# Check size is reasonable (should be 1-2 MB)
-ls -lh u-boot-rockchip.bin
+file boot.scr
+# Expected: "u-boot legacy uImage, , ..."
 ```
 
 ---
 
-### 4. Build Mainline Linux Kernel
+### 5. Create Kernel Build Tools
 
-> **Why:** The mainline kernel (from kernel.org) includes RK3528 support as of v6.16+. We need kernel version 6.18+ to get the NanoPi Zero2 device tree.
+- [ ] **5.1** Create kernel config overlay
 
-- [ ] **4.1** Clone the mainline kernel
+  Create `cmd/gokr-build-kernel/config.txt`:
 
-  ```bash
-  cd ~/nanopi-zero2-build
+  ```text
+  # Ensure /proc/config.gz is available
+  CONFIG_IKCONFIG=y
+  CONFIG_IKCONFIG_PROC=y
 
-  # Option A: Latest stable (if 6.18+ is released)
-  git clone --depth 1 --branch v6.12 https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+  # Disable unnecessary wireless modules
+  CONFIG_BT=n
+  CONFIG_CFG80211=n
+  CONFIG_NFC=n
+  CONFIG_WIRELESS=n
 
-  # Option B: linux-next (for latest RK3528 patches)
-  git clone --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git linux
+  # Performance
+  CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
+  CONFIG_DEBUG_KERNEL=n
+
+  # Required for Tailscale
+  CONFIG_TUN=y
+
+  # Rockchip platform support
+  CONFIG_ARCH_ROCKCHIP=y
+  CONFIG_ROCKCHIP_PHY=y
+  CONFIG_ROCKCHIP_THERMAL=y
+  CONFIG_ROCKCHIP_IOMMU=y
+  CONFIG_ROCKCHIP_IODOMAIN=y
+  CONFIG_ROCKCHIP_PM_DOMAINS=y
+  CONFIG_PWM_ROCKCHIP=y
+  CONFIG_NVMEM_ROCKCHIP_EFUSE=y
+  CONFIG_NVMEM_ROCKCHIP_OTP=y
+
+  # MMC/eMMC support
+  CONFIG_MMC_DW=y
+  CONFIG_MMC_DW_ROCKCHIP=y
+  CONFIG_MMC_SDHCI=y
+  CONFIG_MMC_SDHCI_OF_DWCMSHC=y
+
+  # Ethernet (GMAC)
+  CONFIG_STMMAC_ETH=y
+  CONFIG_STMMAC_PLATFORM=y
+  CONFIG_DWMAC_GENERIC=y
+  CONFIG_DWMAC_ROCKCHIP=y
+
+  # Console
+  CONFIG_CMDLINE="console=ttyS2,1500000"
   ```
 
-  > **Note:** At time of writing, NanoPi Zero2 DTS is targeting v6.18. Check [RK3528 mainline status](https://github.com/ziyao233/rk3528-mainline) for current state. You may need linux-next or to cherry-pick patches.
+- [ ] **5.2** Create the kernel build tool
 
-- [ ] **4.2** Configure the kernel
+  Create `cmd/gokr-build-kernel/build.go`:
 
-  ```bash
-  cd linux
-  make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+  ```go
+  package main
+
+  import (
+  	_ "embed"
+  	"fmt"
+  	"io"
+  	"log"
+  	"net/http"
+  	"os"
+  	"os/exec"
+  	"path/filepath"
+  	"runtime"
+  	"strconv"
+  	"strings"
+  )
+
+  //go:embed config.txt
+  var configContents []byte
+
+  // Update to appropriate kernel version with RK3528 NanoPi Zero2 DTS
+  var kernelURL = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.tar.xz"
+
+  func downloadKernel() error {
+  	filename := filepath.Base(kernelURL)
+  	if _, err := os.Stat(filename); err == nil {
+  		log.Printf("kernel archive already exists, skipping download")
+  		return nil
+  	}
+
+  	log.Printf("downloading %s", kernelURL)
+  	out, err := os.Create(filename)
+  	if err != nil {
+  		return err
+  	}
+  	defer out.Close()
+
+  	resp, err := http.Get(kernelURL)
+  	if err != nil {
+  		return err
+  	}
+  	defer resp.Body.Close()
+
+  	if resp.StatusCode != http.StatusOK {
+  		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, kernelURL)
+  	}
+
+  	_, err = io.Copy(out, resp.Body)
+  	return err
+  }
+
+  func compile() error {
+  	// Start with defconfig
+  	defconfig := exec.Command("make", "ARCH=arm64", "defconfig")
+  	defconfig.Stdout = os.Stdout
+  	defconfig.Stderr = os.Stderr
+  	if err := defconfig.Run(); err != nil {
+  		return fmt.Errorf("make defconfig: %v", err)
+  	}
+
+  	// Append our config overlay
+  	f, err := os.OpenFile(".config", os.O_APPEND|os.O_WRONLY, 0644)
+  	if err != nil {
+  		return err
+  	}
+  	if _, err := f.Write(configContents); err != nil {
+  		f.Close()
+  		return err
+  	}
+  	f.Close()
+
+  	// Resolve config
+  	olddefconfig := exec.Command("make", "ARCH=arm64", "olddefconfig")
+  	olddefconfig.Stdout = os.Stdout
+  	olddefconfig.Stderr = os.Stderr
+  	if err := olddefconfig.Run(); err != nil {
+  		return fmt.Errorf("make olddefconfig: %v", err)
+  	}
+
+  	// Build kernel and DTBs
+  	make := exec.Command("make", "Image", "dtbs", "-j"+strconv.Itoa(runtime.NumCPU()))
+  	make.Env = append(os.Environ(),
+  		"ARCH=arm64",
+  		"CROSS_COMPILE=aarch64-linux-gnu-",
+  		"KBUILD_BUILD_USER=gokrazy",
+  		"KBUILD_BUILD_HOST=docker",
+  	)
+  	make.Stdout = os.Stdout
+  	make.Stderr = os.Stderr
+  	if err := make.Run(); err != nil {
+  		return fmt.Errorf("make: %v", err)
+  	}
+
+  	return nil
+  }
+
+  func copyFile(dest, src string) error {
+  	out, err := os.Create(dest)
+  	if err != nil {
+  		return err
+  	}
+  	defer out.Close()
+
+  	in, err := os.Open(src)
+  	if err != nil {
+  		return err
+  	}
+  	defer in.Close()
+
+  	_, err = io.Copy(out, in)
+  	return err
+  }
+
+  func main() {
+  	if err := downloadKernel(); err != nil {
+  		log.Fatal(err)
+  	}
+
+  	log.Printf("unpacking kernel")
+  	untar := exec.Command("tar", "xf", filepath.Base(kernelURL))
+  	untar.Stdout = os.Stdout
+  	untar.Stderr = os.Stderr
+  	if err := untar.Run(); err != nil {
+  		log.Fatal(err)
+  	}
+
+  	srcdir := strings.TrimSuffix(filepath.Base(kernelURL), ".tar.xz")
+  	if err := os.Chdir(srcdir); err != nil {
+  		log.Fatal(err)
+  	}
+
+  	log.Printf("compiling kernel")
+  	if err := compile(); err != nil {
+  		log.Fatal(err)
+  	}
+
+  	// Copy outputs
+  	if err := copyFile("/tmp/buildresult/vmlinuz", "arch/arm64/boot/Image"); err != nil {
+  		log.Fatal(err)
+  	}
+
+  	dtbSrc := "arch/arm64/boot/dts/rockchip/rk3528-nanopi-zero2.dtb"
+  	if _, err := os.Stat(dtbSrc); err != nil {
+  		log.Fatalf("DTB not found: %s - kernel version may not include NanoPi Zero2 support yet", dtbSrc)
+  	}
+  	if err := copyFile("/tmp/buildresult/rk3528-nanopi-zero2.dtb", dtbSrc); err != nil {
+  		log.Fatal(err)
+  	}
+  }
   ```
 
-  This creates a generic ARM64 config. We'll refine it in Phase 2.
+- [ ] **5.3** Create kernel rebuild wrapper
 
-- [ ] **4.3** Build the kernel and device trees
+  Create `cmd/gokr-rebuild-kernel/kernel.go`:
 
-  ```bash
-  make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+  ```go
+  package main
+
+  import (
+  	"flag"
+  	"io"
+  	"log"
+  	"os"
+  	"os/exec"
+  	"os/user"
+  	"path/filepath"
+  	"text/template"
+  )
+
+  const dockerFileContents = `
+  FROM debian:bookworm
+
+  RUN apt-get update && apt-get install -y \
+      crossbuild-essential-arm64 bc libssl-dev bison flex wget xz-utils
+
+  COPY gokr-build-kernel /usr/bin/gokr-build-kernel
+
+  RUN echo 'builduser:x:{{ .Uid }}:{{ .Gid }}:nobody:/:/bin/sh' >> /etc/passwd && \
+      chown -R {{ .Uid }}:{{ .Gid }} /usr/src
+
+  USER builduser
+  WORKDIR /usr/src
+  ENTRYPOINT /usr/bin/gokr-build-kernel
+  `
+
+  var dockerFileTmpl = template.Must(template.New("dockerfile").Parse(dockerFileContents))
+
+  func copyFile(dest, src string) error {
+  	out, err := os.Create(dest)
+  	if err != nil {
+  		return err
+  	}
+  	defer out.Close()
+
+  	in, err := os.Open(src)
+  	if err != nil {
+  		return err
+  	}
+  	defer in.Close()
+
+  	_, err = io.Copy(out, in)
+  	return err
+  }
+
+  func getContainerExecutable() string {
+  	for _, exe := range []string{"podman", "docker"} {
+  		if _, err := exec.LookPath(exe); err == nil {
+  			return exe
+  		}
+  	}
+  	return "docker"
+  }
+
+  func main() {
+  	flag.Parse()
+  	executable := getContainerExecutable()
+
+  	tmp, err := os.MkdirTemp("/tmp", "gokr-rebuild-kernel")
+  	if err != nil {
+  		log.Fatal(err)
+  	}
+  	defer os.RemoveAll(tmp)
+
+  	// Build the gokr-build-kernel binary for Linux
+  	cmd := exec.Command("go", "build", "-o", filepath.Join(tmp, "gokr-build-kernel"),
+  		"./cmd/gokr-build-kernel")
+  	cmd.Env = append(os.Environ(), "GOOS=linux", "CGO_ENABLED=0")
+  	cmd.Stderr = os.Stderr
+  	if err := cmd.Run(); err != nil {
+  		log.Fatalf("go build: %v", err)
+  	}
+
+  	// Create Dockerfile
+  	u, err := user.Current()
+  	if err != nil {
+  		log.Fatal(err)
+  	}
+
+  	dockerFile, err := os.Create(filepath.Join(tmp, "Dockerfile"))
+  	if err != nil {
+  		log.Fatal(err)
+  	}
+  	if err := dockerFileTmpl.Execute(dockerFile, struct{ Uid, Gid string }{u.Uid, u.Gid}); err != nil {
+  		log.Fatal(err)
+  	}
+  	dockerFile.Close()
+
+  	// Build container
+  	log.Printf("building %s container for kernel compilation", executable)
+  	build := exec.Command(executable, "build", "--rm=true", "--tag=gokr-rebuild-kernel", ".")
+  	build.Dir = tmp
+  	build.Stdout = os.Stdout
+  	build.Stderr = os.Stderr
+  	if err := build.Run(); err != nil {
+  		log.Fatalf("%s build: %v", executable, err)
+  	}
+
+  	// Run container
+  	log.Printf("compiling kernel (this takes 10-30 minutes)")
+  	run := exec.Command(executable, "run", "--rm", "-v", tmp+":/tmp/buildresult:Z", "gokr-rebuild-kernel")
+  	run.Stdout = os.Stdout
+  	run.Stderr = os.Stderr
+  	if err := run.Run(); err != nil {
+  		log.Fatalf("%s run: %v", executable, err)
+  	}
+
+  	// Copy results back
+  	for _, file := range []string{"vmlinuz", "rk3528-nanopi-zero2.dtb"} {
+  		if err := copyFile(file, filepath.Join(tmp, file)); err != nil {
+  			log.Fatal(err)
+  		}
+  		log.Printf("wrote %s", file)
+  	}
+  }
   ```
-
-  This takes 10-30 minutes depending on your machine.
-
-- [ ] **4.4** Verify build outputs
-
-  ```bash
-  ls -la arch/arm64/boot/Image
-  ls -la arch/arm64/boot/dts/rockchip/rk3528-nanopi-zero2.dtb
-  ```
-
-  > **If the DTB is missing:** The NanoPi Zero2 device tree may not be in your kernel version yet. See Troubleshooting section.
-
-#### Test: Kernel Build Verification
-
-```bash
-# Check kernel image exists and is reasonable size (15-25 MB)
-ls -lh arch/arm64/boot/Image
-
-# Check device tree exists
-ls arch/arm64/boot/dts/rockchip/rk3528*.dtb
-
-# Verify it's an ARM64 kernel
-file arch/arm64/boot/Image
-# Expected: "Linux kernel ARM64 boot executable Image"
-```
 
 ---
 
-### 5. Prepare Bootable SD Card
+### 6. Build Kernel
 
-> **Why:** We'll create a minimal SD card with U-Boot, kernel, and device tree. No root filesystem yet - we just want to see the kernel boot and panic (which proves everything works up to that point).
-
-- [ ] **5.1** Insert SD card and identify the device
+- [ ] **6.1** Run the kernel build
 
   ```bash
-  # Before inserting
-  ls /dev/sd*
-
-  # After inserting
-  ls /dev/sd*
-
-  # The new device is your SD card (e.g., /dev/sdb)
-  # BE VERY CAREFUL - wrong device = data loss!
+  go run ./cmd/gokr-rebuild-kernel
   ```
 
-  On macOS: `diskutil list` (look for the SD card, e.g., `/dev/disk4`)
+  This takes 10-30 minutes. It will:
+  - Download the kernel source
+  - Apply the config overlay
+  - Cross-compile for ARM64
+  - Output `vmlinuz` and `rk3528-nanopi-zero2.dtb`
 
-- [ ] **5.2** Unmount any auto-mounted partitions
+- [ ] **6.2** Verify outputs
 
   ```bash
-  # Linux
-  sudo umount /dev/sdb*
+  ls -lh vmlinuz rk3528-nanopi-zero2.dtb
+  # vmlinuz should be ~15-25 MB
+  # DTB should be ~50-100 KB
 
+  file vmlinuz
+  # Expected: "Linux kernel ARM64 boot executable Image, ..."
+  ```
+
+---
+
+### 7. Prepare Test SD Card
+
+> **Why:** We test the built artifacts by booting on real hardware.
+
+- [ ] **7.1** Identify SD card device
+
+  ```bash
   # macOS
-  diskutil unmountDisk /dev/disk4
+  diskutil list
+
+  # Linux
+  lsblk
   ```
 
-- [ ] **5.3** Write U-Boot to SD card
+  **Be very careful** - wrong device = data loss!
+
+- [ ] **7.2** Write U-Boot to SD card
 
   ```bash
-  cd ~/nanopi-zero2-build/u-boot
+  # Unmount first
+  diskutil unmountDisk /dev/diskX   # macOS
+  sudo umount /dev/sdX*             # Linux
 
-  # Linux (replace sdX with your device!)
-  sudo dd if=u-boot-rockchip.bin of=/dev/sdX seek=64 bs=512 conv=notrunc
-  sudo sync
-
-  # macOS (use raw device for speed)
-  sudo dd if=u-boot-rockchip.bin of=/dev/rdiskX seek=64 bs=512
+  # Write U-Boot at sector 64
+  sudo dd if=u-boot-rockchip.bin of=/dev/rdiskX seek=64 bs=512   # macOS
+  sudo dd if=u-boot-rockchip.bin of=/dev/sdX seek=64 bs=512      # Linux
   sudo sync
   ```
 
-  > **Why seek=64?** Rockchip bootrom expects the bootloader at sector 64 (32 KB offset). Sectors 0-63 are reserved.
-
-- [ ] **5.4** Create a FAT32 boot partition
+- [ ] **7.3** Create boot partition
 
   ```bash
+  # macOS (use Disk Utility or)
+  diskutil partitionDisk /dev/diskX GPT FAT32 BOOT 256MB "Free Space" 0
+
   # Linux
   sudo parted /dev/sdX --script mklabel gpt
   sudo parted /dev/sdX --script mkpart primary fat32 16MB 256MB
   sudo mkfs.vfat -F 32 /dev/sdX1
-
-  # Mount it
-  sudo mkdir -p /mnt/boot
-  sudo mount /dev/sdX1 /mnt/boot
   ```
 
-  > **Why start at 16MB?** Leaves room for U-Boot in the reserved area.
-
-- [ ] **5.5** Copy kernel and device tree to boot partition
+- [ ] **7.4** Copy boot files
 
   ```bash
-  cd ~/nanopi-zero2-build/linux
+  # Mount boot partition
+  # macOS: mounts automatically as /Volumes/BOOT
+  # Linux: sudo mount /dev/sdX1 /mnt
 
-  sudo cp arch/arm64/boot/Image /mnt/boot/
-  sudo cp arch/arm64/boot/dts/rockchip/rk3528-nanopi-zero2.dtb /mnt/boot/
-  ```
+  cp vmlinuz /Volumes/BOOT/           # or /mnt/
+  cp rk3528-nanopi-zero2.dtb /Volumes/BOOT/
+  cp boot.scr /Volumes/BOOT/
+  cp cmdline.txt /Volumes/BOOT/
 
-- [ ] **5.6** Create U-Boot boot script
-
-  Create a file `boot.cmd`:
-
-  ```bash
-  cat << 'EOF' | sudo tee /mnt/boot/boot.cmd
-  setenv bootargs console=ttyS2,1500000 earlycon=uart8250,mmio32,0xff9f0000
-  load mmc 0:1 ${kernel_addr_r} Image
-  load mmc 0:1 ${fdt_addr_r} rk3528-nanopi-zero2.dtb
-  booti ${kernel_addr_r} - ${fdt_addr_r}
-  EOF
-  ```
-
-  Compile it to a U-Boot script:
-
-  ```bash
-  sudo mkimage -C none -A arm64 -T script -d /mnt/boot/boot.cmd /mnt/boot/boot.scr
-  ```
-
-  > **Install mkimage if needed:** `sudo apt install u-boot-tools`
-
-- [ ] **5.7** Unmount and eject
-
-  ```bash
-  sudo umount /mnt/boot
-  sudo sync
+  # Unmount
+  diskutil unmount /Volumes/BOOT      # macOS
+  sudo umount /mnt                     # Linux
   ```
 
 ---
 
-### 6. First Boot Test
+### 8. Boot Test
 
-> **Why:** This is the moment of truth. We expect to see U-Boot messages, then kernel boot messages, then a kernel panic (because there's no root filesystem).
-
-- [ ] **6.1** Connect serial adapter to your computer
-
-- [ ] **6.2** Start serial terminal
+- [ ] **8.1** Connect serial adapter and start terminal
 
   ```bash
-  picocom -b 1500000 /dev/ttyUSB0
+  picocom -b 1500000 /dev/tty.usbserial-*
   ```
 
-- [ ] **6.3** Insert SD card into NanoPi Zero2
+- [ ] **8.2** Insert SD card and power on
 
-- [ ] **6.4** Apply power via USB-C
-
-- [ ] **6.5** Watch for boot output
+- [ ] **8.3** Watch for boot output
 
 #### Test: Expected Serial Output
 
-**Success looks like this (abbreviated):**
-
-```
+```text
 DDR V1.10
 LPDDR4X, 1056MHz
-channel[0] BW=16 Col=10 Bk=8 CS0 Row=15 CS1 Row=15 CS=2 Die BW=16
-
-U-Boot TPL 2025.01-... (date)
-U-Boot SPL 2025.01-... (date)
-
-U-Boot 2025.01-... (date)
-Model: Generic RK3528
-DRAM:  2 GiB
 ...
+U-Boot TPL 2025.01-...
+U-Boot SPL 2025.01-...
 
-Starting kernel ...
+U-Boot 2025.01-...
+Model: Generic RK3528
+DRAM: 2 GiB
+...
+Loading kernel ...
+Boot args: console=ttyS2,1500000 earlycon root=/dev/mmcblk0p2 rootwait panic=10 oops=panic init=/gokrazy/init
+Booting kernel ...
 
 [    0.000000] Booting Linux on physical CPU 0x0000000000 [0x410fd034]
-[    0.000000] Linux version 6.x.0 (...)
+[    0.000000] Linux version 6.x.0 ...
 [    0.000000] Machine model: FriendlyElec NanoPi Zero2
 ...
-[    1.234567] ---[ end Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0) ]---
+[    1.xxx] ---[ end Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0) ]---
 ```
 
-**The kernel panic is expected!** It means:
+**The kernel panic is expected!** It confirms:
 
-- ✅ DDR initialized correctly
-- ✅ U-Boot loaded and ran
-- ✅ Kernel loaded and started
-- ✅ Device tree was parsed
-- ❌ No root filesystem (expected - we didn't provide one)
+- ✅ U-Boot built correctly and boots
+- ✅ boot.scr loads cmdline.txt correctly
+- ✅ Kernel built correctly and boots
+- ✅ Device tree is recognized
+- ❌ No gokrazy root filesystem (that's Phase 2+)
 
 ---
 
@@ -422,64 +653,46 @@ Starting kernel ...
 
 ### No output at all
 
-1. **Check wiring:** TX/RX may be swapped. Try swapping them.
-2. **Check baud rate:** Must be exactly 1500000.
-3. **Check voltage:** The debug UART is 3.3V. 5V adapters can damage the board.
-4. **Try another adapter:** Some adapters can't do 1.5 Mbaud.
+1. Check TX/RX wiring (try swapping)
+2. Verify baud rate is exactly 1500000
+3. Ensure adapter supports 1.5 Mbaud
 
-### Garbled output
+### Docker build fails
 
-- Wrong baud rate (most likely)
-- Hardware flow control enabled (disable it)
-- Bad USB cable or adapter
+- Ensure Docker daemon is running
+- Check you have ~5GB free disk space
+- Try `docker system prune` to free space
 
-### U-Boot shows but kernel doesn't load
+### DTB missing from kernel build
 
-1. Check file names match exactly (`Image`, `rk3528-nanopi-zero2.dtb`)
-2. Check boot.scr was created properly
-3. In U-Boot prompt, try manually:
+The NanoPi Zero2 DTS targets kernel v6.18+. Options:
+1. Use linux-next instead of stable kernel
+2. Manually add DTS from [Jonas Karlman's patches](https://lists.infradead.org/pipermail/linux-arm-kernel/2025-July/1045454.html)
 
-   ```text
-   fatls mmc 0:1
-   ```
+### U-Boot shows but kernel fails to load
 
-   to see what files U-Boot can see.
-
-### Device tree file missing from kernel build
-
-The NanoPi Zero2 DTS is in mainline as of the v6.18 merge window. If building an older kernel:
-
-1. Check [linux-next](https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git) for the latest
-2. Or manually add the DTS file from [Jonas Karlman's patches](https://lists.infradead.org/pipermail/linux-arm-kernel/2025-July/1045454.html)
-
-### macOS: Can't set 1500000 baud
-
-macOS serial drivers often don't support non-standard baud rates. Solutions:
-
-- Use a Linux VM (recommended)
-- Try a Docker container with USB passthrough
-- Use a Raspberry Pi as a serial bridge
+1. Check boot.scr was generated correctly
+2. In U-Boot, run `fatls mmc 0:1` to verify files exist
+3. Check kernel isn't too large for memory addresses
 
 ---
 
 ## Phase 1 Completion Criteria
 
-Before moving to Phase 2, verify:
-
-- [ ] Serial terminal connected and working at 1500000 baud
-- [ ] U-Boot successfully built for RK3528
-- [ ] Mainline kernel successfully built with RK3528 support
-- [ ] U-Boot boots and shows DDR info + U-Boot banner
-- [ ] Kernel loads and shows boot messages
-- [ ] Kernel panic shows "Unable to mount root fs" (expected)
-- [ ] Serial console shows "Machine model: FriendlyElec NanoPi Zero2"
+- [ ] Docker-based U-Boot build completes successfully
+- [ ] Docker-based kernel build completes successfully
+- [ ] All artifacts exist: `u-boot-rockchip.bin`, `boot.scr`, `vmlinuz`, `rk3528-nanopi-zero2.dtb`
+- [ ] Serial terminal connects at 1500000 baud
+- [ ] U-Boot boots and shows DDR/DRAM info
+- [ ] boot.scr correctly loads cmdline.txt
+- [ ] Kernel boots and shows "Machine model: FriendlyElec NanoPi Zero2"
+- [ ] Kernel panics with "Unable to mount root fs" (expected)
 
 ---
 
 ## Resources
 
+- [gokrazy-rock64-kernel](https://github.com/anupcshan/gokrazy-rock64-kernel) - Reference implementation
 - [U-Boot Rockchip Documentation](https://docs.u-boot.org/en/latest/board/rockchip/rockchip.html)
 - [RK3528 Mainline Status Tracker](https://github.com/ziyao233/rk3528-mainline)
 - [NanoPi Zero2 Wiki](https://wiki.friendlyelec.com/wiki/index.php/NanoPi_Zero2)
-- [Cross-compiling for ARM64](https://jensd.be/1126/linux/cross-compiling-for-arm-or-aarch64-on-debian-or-ubuntu)
-- [Radxa Serial Console Guide](https://wiki.radxa.com/Rockpi4/dev/serial-console)
