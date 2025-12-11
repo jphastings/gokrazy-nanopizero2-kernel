@@ -15,7 +15,8 @@ const (
 	ubootRepo = "https://github.com/u-boot/u-boot"
 	ubootRev  = "v2025.10"
 	rkbinRepo = "https://github.com/rockchip-linux/rkbin"
-	rkbinRev  = "master"
+	// This is v1.07
+	rkbinRev  = "74213af1e952c4683d2e35952507133b61394862"
 )
 
 func copyFile(dest, src string) error {
@@ -52,27 +53,22 @@ func compile(ubootDir, rkbinDir string) error {
 		return fmt.Errorf("make defconfig: %v", err)
 	}
 
-	// Append config options:
-	// - CONFIG_BOOTMETH_SCRIPT: Enable boot.scr script boot method
-	// - CONFIG_CMD_SETEXPR: Enable setexpr command for boot.scr cmdline.txt loading
-	f, err := os.OpenFile(filepath.Join(ubootDir, ".config"), os.O_RDWR|os.O_APPEND, 0644)
-	if err != nil {
-		return err
+	scriptsConfig := filepath.Join(ubootDir, "scripts/config")
+
+	// Enable boot.scr script boot method and setexpr command, disable EFI
+	if err := run(
+		ubootDir, scriptsConfig,
+		"--enable", "BOOTMETH_SCRIPT",
+		"--enable", "CMD_SETEXPR",
+		"--enable", "CMD_SETEXPR_FMT",
+		"--disable", "EFI_LOADER",
+	); err != nil {
+		return fmt.Errorf("configure: %w", err)
 	}
-	configOverlay := `
-CONFIG_BOOTMETH_SCRIPT=y
-CONFIG_CMD_SETEXPR=y
-CONFIG_CMD_SETEXPR_FMT=y
-`
-	if _, err := f.WriteString(configOverlay); err != nil {
-		f.Close()
-		return err
-	}
-	f.Close()
 
 	// Resolve config dependencies
 	if err := run(ubootDir, "make", "ARCH=arm64", "olddefconfig"); err != nil {
-		return fmt.Errorf("make olddefconfig: %v", err)
+		return fmt.Errorf("make olddefconfig: %w", err)
 	}
 
 	// Build U-Boot
