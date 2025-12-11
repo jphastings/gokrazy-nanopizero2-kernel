@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Phase 1 completed (kernel boots, panics on missing rootfs)
-- `gokr-packer` installed: `go install github.com/gokrazy/tools/cmd/gokr-packer@latest`
+- `gok` tool installed: `go install github.com/gokrazy/tools/cmd/gok@latest`
 - Working SD card with U-Boot installed
 
 ## Overview
@@ -36,12 +36,14 @@ SD Card Layout:
 > **Why:** GoKrazy has a specific init system and expects certain kernel features.
 
 GoKrazy boot sequence:
+
 1. U-Boot loads kernel, DTB, and cmdline.txt
 2. Kernel boots with `init=/gokrazy/init`
 3. GoKrazy init mounts root partition (SquashFS)
 4. GoKrazy init starts configured services
 
 Required kernel features:
+
 - SquashFS support (`CONFIG_SQUASHFS=y`)
 - ext4 support for perm partition (`CONFIG_EXT4_FS=y`)
 - Network drivers for updates
@@ -49,18 +51,18 @@ Required kernel features:
 
 ### 2. Update Kernel Config
 
-- [ ] **2.1** Review current kernel config
+- [x] **2.1** Review current kernel config
 
   ```bash
   # Check if SquashFS is enabled
   grep CONFIG_SQUASHFS cmd/gokr-build-kernel/config.txt
   ```
 
-- [ ] **2.2** Add required GoKrazy options to config.txt
+- [x] **2.2** Add required GoKrazy options to config.txt
 
   Edit `cmd/gokr-build-kernel/config.txt` and ensure these are present:
 
-  ```
+  ```text
   # Required for GoKrazy
   CONFIG_SQUASHFS=y
   CONFIG_SQUASHFS_XZ=y
@@ -78,7 +80,7 @@ Required kernel features:
   CONFIG_IP_NF_FILTER=y
   ```
 
-- [ ] **2.3** Rebuild kernel
+- [x] **2.3** Rebuild kernel
 
   ```bash
   go run ./cmd/gokr-rebuild-kernel
@@ -86,13 +88,13 @@ Required kernel features:
 
 ### 3. Update Boot Configuration
 
-- [ ] **3.1** Fix cmdline.txt for SD card root
+- [x] **3.1** Fix cmdline.txt for SD card root
 
   The kernel currently tries to mount `/dev/mmcblk0p2` (eMMC), but we need `/dev/mmcblk1p2` (SD card).
 
   Edit `cmdline.txt`:
 
-  ```
+  ```text
   console=ttyS2,1500000 earlycon root=/dev/mmcblk1p2 rootwait ro panic=10 oops=panic init=/gokrazy/init
   ```
 
@@ -101,30 +103,60 @@ Required kernel features:
   - Added `ro` (read-only root)
   - Added `init=/gokrazy/init`
 
-- [ ] **3.2** Rebuild boot.scr
+- [x] **3.2** Rebuild boot.scr
 
   ```bash
   go run ./cmd/gokr-rebuild-uboot
   ```
 
-### 4. Create GoKrazy Instance Configuration
+### 4. Publish Kernel Package Locally
 
-- [ ] **4.1** Create a gokrazy instance directory
+> **Why:** The `gok` tool needs to import the kernel package as a Go module. For development, we use a local `replace` directive.
+
+- [x] **4.1** Ensure kernel package has required files
+
+  The kernel package (this repository) must contain:
+  - `vmlinuz` - Compiled kernel image
+  - `rk3528-nanopi-zero2.dtb` - Device tree blob
+  - `boot.scr` - U-Boot boot script
+  - `cmdline.txt` - Kernel command line
+  - `kernel.go` - Empty Go package for import
+  - `go.mod` - Go module definition
+
+  Verify all files exist:
+
+  ```bash
+  ls -la vmlinuz rk3528-nanopi-zero2.dtb boot.scr cmdline.txt kernel.go go.mod
+  ```
+
+- [ ] **4.2** Note the local path
+
+  ```bash
+  # This is your kernel package path
+  echo $PWD
+  # Example: /Users/jp/src/personal/gokrazy-nanopizero2-kernel
+  ```
+
+### 5. Create GoKrazy Instance
+
+- [x] **5.1** Create a gokrazy instance directory
 
   ```bash
   mkdir -p ~/gokrazy/nanopi-zero2
   cd ~/gokrazy/nanopi-zero2
   ```
 
-- [ ] **4.2** Initialize gokrazy config
+- [x] **5.2** Initialize gokrazy instance
 
   ```bash
-  gok new
+  gok -i nanopi-zero2 new
   ```
 
-- [ ] **4.3** Edit config.json
+  This creates `config.json` in `~/gokrazy/nanopi-zero2/`.
 
-  Create/edit `config.json`:
+- [ ] **5.3** Edit config.json
+
+  Edit `~/gokrazy/nanopi-zero2/config.json`:
 
   ```json
   {
@@ -134,100 +166,80 @@ Required kernel features:
       "github.com/gokrazy/serial-busybox"
     ],
     "SerialConsole": "ttyS2,1500000",
-    "KernelPackage": "",
+    "KernelPackage": "github.com/jphastings/gokrazy-nanopizero2-kernel",
     "FirmwarePackage": "",
     "EEPROMPackage": ""
   }
   ```
 
-  > Note: We'll specify custom kernel/firmware via command line flags.
+  > **Note:** Adjust `KernelPackage` to match your module path in `go.mod`.
 
-### 5. Build GoKrazy Image
+- [x] **5.4** Create go.mod with local replace
 
-- [ ] **5.1** Build root filesystem
-
-  For initial testing, we'll create the image manually since gokr-packer doesn't know about our custom board yet.
+  Create `~/gokrazy/nanopi-zero2/go.mod`:
 
   ```bash
-  # Build a root filesystem image
-  gok build -o /tmp/gokrazy-root.squashfs
+  cd ~/gokrazy/nanopi-zero2
+  go mod init nanopi-zero2
   ```
 
-- [ ] **5.2** Alternative: Create minimal test rootfs
+  Then edit `go.mod` to add a replace directive:
 
-  If gokr-packer integration is complex, create a minimal SquashFS for testing:
+  ```go
+  module nanopi-zero2
 
-  ```bash
-  # Create minimal init for testing
-  mkdir -p /tmp/gokrazy-root/gokrazy
+  go 1.21
 
-  # Create a simple init script that just prints and sleeps
-  cat > /tmp/gokrazy-root/gokrazy/init << 'EOF'
-  #!/bin/sh
-  echo "GoKrazy init starting..."
-  echo "Kernel: $(uname -r)"
-  echo "Success! GoKrazy booted on NanoPi Zero2"
-
-  # Mount essential filesystems
-  mount -t proc proc /proc
-  mount -t sysfs sysfs /sys
-  mount -t devtmpfs devtmpfs /dev
-
-  # Show network interfaces
-  ip link
-
-  # Keep system running
-  echo "Dropping to shell..."
-  exec /bin/sh
-  EOF
-  chmod +x /tmp/gokrazy-root/gokrazy/init
-
-  # Need busybox for basic commands
-  # (This is just for testing - real GoKrazy uses Go binaries)
+  replace github.com/jphastings/gokrazy-nanopizero2-kernel => /Users/jp/src/personal/gokrazy-nanopizero2-kernel
   ```
 
-  > This step requires more research into GoKrazy's actual init requirements.
+  > Adjust paths to match your actual locations.
 
-### 6. Prepare SD Card with Full Layout
+### 6. Deploy to SD Card
 
-- [ ] **6.1** Create proper partition layout
+> **Why:** `gok overwrite` creates the full partition layout and writes all components.
 
-  On macOS, use `diskutil` carefully or use a Linux VM for better control:
+- [ ] **6.1** Identify your SD card device
 
   ```bash
-  # This is approximate - may need adjustment
-  diskutil partitionDisk /dev/diskX GPT \
-    FAT32 BOOT 256MB \
-    FAT32 ROOT 512MB \
-    FAT32 PERM 0b
+  # macOS
+  diskutil list
+
+  # Look for your SD card (e.g., /dev/disk4)
   ```
 
-  > Note: ROOT should be SquashFS but macOS can't create that. We'll dd the image.
+  **Be extremely careful** - wrong device = data loss!
 
-- [ ] **6.2** Write U-Boot
+- [x] **6.2** Deploy with gok overwrite
 
   ```bash
+  cd ~/gokrazy/nanopi-zero2
+
+  # Full overwrite (creates all partitions)
+  gok -i nanopi-zero2 overwrite --full /dev/diskX
+  ```
+
+  This will:
+  - Create the 4-partition layout (MBR, boot, root, perm)
+  - Copy kernel, DTB, boot.scr, cmdline.txt to boot partition
+  - Build and write SquashFS root filesystem
+  - Create empty ext4 perm partition
+
+  > **Note:** Replace `/dev/diskX` with your actual SD card device.
+
+- [ ] **6.3** Write U-Boot manually
+
+  `gok overwrite` doesn't know about Rockchip U-Boot placement, so we write it manually:
+
+  ```bash
+  # Unmount first
   diskutil unmountDisk /dev/diskX
+
+  # Write U-Boot at sector 64
   sudo dd if=u-boot-rockchip.bin of=/dev/rdiskX seek=64 bs=512
-  ```
 
-- [ ] **6.3** Copy boot files
-
-  ```bash
-  diskutil mount /dev/diskXs1  # or wait for auto-mount
-  cp vmlinuz /Volumes/BOOT/
-  cp rk3528-nanopi-zero2.dtb /Volumes/BOOT/
-  cp boot.scr /Volumes/BOOT/
-  cp cmdline.txt /Volumes/BOOT/
-  diskutil unmount /Volumes/BOOT
-  ```
-
-- [ ] **6.4** Write root filesystem
-
-  ```bash
-  # This requires the SquashFS image from step 5
-  diskutil unmountDisk /dev/diskX
-  sudo dd if=/tmp/gokrazy-root.squashfs of=/dev/rdiskXs2 bs=1M
+  # Sync
+  sync
   ```
 
 ### 7. Test Boot
@@ -244,15 +256,33 @@ Required kernel features:
 
   Expected output:
   ```
+  DDR V1.10
+  LPDDR4X, 1056MHz
+  ...
+  U-Boot 2025.10
+  ...
+  Loading kernel ...
+  Boot args: console=ttyS2,1500000 earlycon root=/dev/mmcblk1p2 rootwait ro panic=10 oops=panic init=/gokrazy/init
+  Booting kernel ...
+
   [    0.000000] Linux version 6.18.0 ...
   [    0.000000] Machine model: FriendlyElec NanoPi Zero2
   ...
   [    x.xxx] VFS: Mounted root (squashfs filesystem) readonly
   ...
-  GoKrazy init starting...
+  gokrazy: kernel, hardware support, and system health
+  gokrazy: eth0: 192.168.x.x
   ```
 
 ### 8. Debug Common Issues
+
+#### gok overwrite fails with "unknown kernel package"
+
+```
+cannot resolve KernelPackage: ...
+```
+
+**Fix:** Ensure the `replace` directive in `go.mod` is correct and the local path exists.
 
 #### Root filesystem not found
 
@@ -260,12 +290,13 @@ Required kernel features:
 VFS: Cannot open root device "mmcblk1p2"
 ```
 
-**Fix:** Verify partition exists and cmdline.txt has correct device.
+**Fix:** Verify partition exists. The `gok overwrite` partition numbering might differ. Check with U-Boot:
 
-At U-Boot prompt:
 ```
 mmc part 1
 ```
+
+If root is on a different partition, update `cmdline.txt` accordingly.
 
 #### SquashFS mount fails
 
@@ -273,7 +304,7 @@ mmc part 1
 VFS: Cannot mount root fs of unknown type
 ```
 
-**Fix:** Kernel missing `CONFIG_SQUASHFS=y`. Rebuild kernel.
+**Fix:** Kernel missing `CONFIG_SQUASHFS=y`. Rebuild kernel with this option.
 
 #### Init not found
 
@@ -281,7 +312,89 @@ VFS: Cannot mount root fs of unknown type
 Kernel panic - not syncing: No working init found
 ```
 
-**Fix:** Root filesystem doesn't have `/gokrazy/init`. Check SquashFS contents.
+**Fix:** Root filesystem doesn't have `/gokrazy/init`. This means the SquashFS wasn't built correctly by gok.
+
+#### Network not working
+
+GoKrazy uses DHCP by default. If no IP is assigned:
+1. Check kernel has network drivers: `CONFIG_DWMAC_ROCKCHIP=y`
+2. Check ethernet cable is connected
+3. Check DHCP server is available on network
+
+---
+
+## Alternative: Manual SquashFS Creation
+
+If `gok overwrite` doesn't work with the custom kernel package, you can create a minimal test root filesystem manually.
+
+### Install squashfs-tools
+
+```bash
+# macOS (via Homebrew)
+brew install squashfs
+
+# Linux
+sudo apt install squashfs-tools
+```
+
+### Create minimal test init
+
+```bash
+# Create root structure
+mkdir -p /tmp/gokrazy-root/gokrazy
+mkdir -p /tmp/gokrazy-root/proc
+mkdir -p /tmp/gokrazy-root/sys
+mkdir -p /tmp/gokrazy-root/dev
+mkdir -p /tmp/gokrazy-root/tmp
+
+# Download static busybox
+curl -L -o /tmp/gokrazy-root/bin/busybox \
+  "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox"
+chmod +x /tmp/gokrazy-root/bin/busybox
+
+# Create init script
+cat > /tmp/gokrazy-root/gokrazy/init << 'EOF'
+#!/bin/busybox sh
+echo "=== GoKrazy Test Init ==="
+echo "Kernel: $(uname -r)"
+echo "Machine: $(uname -m)"
+
+# Mount essential filesystems
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev
+
+echo ""
+echo "=== Network Interfaces ==="
+/bin/busybox ip link
+
+echo ""
+echo "=== Block Devices ==="
+/bin/busybox ls -la /dev/mmcblk*
+
+echo ""
+echo "=== SUCCESS! NanoPi Zero2 booted with GoKrazy-style init ==="
+echo ""
+echo "Dropping to shell (type 'poweroff' to shutdown)..."
+exec /bin/busybox sh
+EOF
+chmod +x /tmp/gokrazy-root/gokrazy/init
+
+# Create SquashFS image
+mksquashfs /tmp/gokrazy-root /tmp/root.squashfs -noappend -comp xz
+```
+
+> **Note:** This requires an ARM64 busybox binary, not x86_64. Download from:
+> https://busybox.net/downloads/binaries/ (look for `busybox-armv8l`)
+
+### Write to SD card manually
+
+```bash
+# Assuming partition 2 is root
+diskutil unmountDisk /dev/diskX
+sudo dd if=/tmp/root.squashfs of=/dev/rdiskXs2 bs=1M
+sync
+```
 
 ---
 
@@ -289,25 +402,11 @@ Kernel panic - not syncing: No working init found
 
 - [ ] Kernel config includes SquashFS, ext4, loop device support
 - [ ] cmdline.txt points to correct SD card partition
-- [ ] SD card has 3-partition layout (boot, root, perm)
+- [ ] SD card has proper partition layout (boot, root, perm)
 - [ ] Root partition contains valid SquashFS with GoKrazy init
 - [ ] System boots to GoKrazy init without panic
 - [ ] Network interface (eth0) is visible
 - [ ] Serial console is functional
-
----
-
-## Research Needed
-
-1. **GoKrazy init requirements:** What does `/gokrazy/init` actually need?
-   - Review https://github.com/gokrazy/gokrazy/tree/main/cmd/init
-
-2. **gokr-packer integration:** Can we use `gokr-packer -overwrite` with custom kernel?
-   - Need to create a Go package that exports kernel/dtb/firmware
-
-3. **Kernel module handling:** Does GoKrazy need any kernel modules, or should everything be built-in?
-
-4. **Network configuration:** How does GoKrazy configure eth0? DHCP? Static?
 
 ---
 

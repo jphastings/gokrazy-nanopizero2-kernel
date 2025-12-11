@@ -1,4 +1,5 @@
 echo "Loading kernel ..."
+echo "Boot device: ${devtype} ${devnum}:${bootpart}"
 
 # Load compressed kernel image
 load ${devtype} ${devnum}:${bootpart} ${kernel_addr_r} vmlinuz
