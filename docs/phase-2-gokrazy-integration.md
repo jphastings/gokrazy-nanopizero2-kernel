@@ -204,7 +204,7 @@ Required kernel features:
 
 > **Why:** `gok overwrite` creates the full partition layout and writes all components.
 
-- [ ] **6.1** Identify your SD card device
+- [x] **6.1** Identify your SD card device
 
   ```bash
   # macOS
@@ -234,18 +234,18 @@ Required kernel features:
 
 ### 7. Test Boot
 
-- [ ] **7.1** Connect serial and boot
+- [x] **7.1** Connect serial and boot
 
   ```bash
   picocom -b 1500000 /dev/tty.usbserial-*
   ```
 
-- [ ] **7.2** Insert SD card and power on
+- [x] **7.2** Insert SD card and power on
 
-- [ ] **7.3** Verify boot messages
+- [x] **7.3** Verify boot messages
 
   Expected output:
-  ```
+  ```text
   DDR V1.10
   LPDDR4X, 1056MHz
   ...
@@ -268,7 +268,7 @@ Required kernel features:
 
 #### gok overwrite fails with "unknown kernel package"
 
-```
+```text
 cannot resolve KernelPackage: ...
 ```
 
@@ -276,13 +276,13 @@ cannot resolve KernelPackage: ...
 
 #### Root filesystem not found
 
-```
+```text
 VFS: Cannot open root device "mmcblk1p2"
 ```
 
 **Fix:** Verify partition exists. The `gok overwrite` partition numbering might differ. Check with U-Boot:
 
-```
+```text
 mmc part 1
 ```
 
@@ -290,7 +290,7 @@ If root is on a different partition, update `cmdline.txt` accordingly.
 
 #### SquashFS mount fails
 
-```
+```text
 VFS: Cannot mount root fs of unknown type
 ```
 
@@ -298,7 +298,7 @@ VFS: Cannot mount root fs of unknown type
 
 #### Init not found
 
-```
+```text
 Kernel panic - not syncing: No working init found
 ```
 
@@ -307,6 +307,7 @@ Kernel panic - not syncing: No working init found
 #### Network not working
 
 GoKrazy uses DHCP by default. If no IP is assigned:
+
 1. Check kernel has network drivers: `CONFIG_DWMAC_ROCKCHIP=y`
 2. Check ethernet cable is connected
 3. Check DHCP server is available on network
@@ -390,13 +391,13 @@ sync
 
 ## Phase 2 Completion Criteria
 
-- [ ] Kernel config includes SquashFS, ext4, loop device support
-- [ ] cmdline.txt points to correct SD card partition
-- [ ] SD card has proper partition layout (boot, root, perm)
-- [ ] Root partition contains valid SquashFS with GoKrazy init
-- [ ] System boots to GoKrazy init without panic
+- [x] Kernel config includes SquashFS, ext4, loop device support
+- [x] cmdline.txt points to correct SD card partition
+- [x] SD card has proper partition layout (boot, root, perm)
+- [x] Root partition contains valid SquashFS with GoKrazy init
+- [x] System boots to GoKrazy init without panic
 - [ ] Network interface (eth0) is visible
-- [ ] Serial console is functional
+- [x] Serial console is functional
 
 ---
 
