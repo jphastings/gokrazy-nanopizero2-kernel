@@ -165,14 +165,19 @@ Required kernel features:
       "github.com/gokrazy/hello",
       "github.com/gokrazy/serial-busybox"
     ],
-    "SerialConsole": "ttyS2,1500000",
+    "SerialConsole": "ttyS0,1500000",
     "KernelPackage": "github.com/jphastings/gokrazy-nanopizero2-kernel",
     "FirmwarePackage": "",
-    "EEPROMPackage": ""
+    "EEPROMPackage": "",
+    "DeviceType": "rock64"
   }
   ```
 
   > **Note:** Adjust `KernelPackage` to match your module path in `go.mod`.
+
+  There's also a hack here. Once I've completed my work here, I'll submit a patch to have a new DeviceType included included in GoKrazy.
+
+  > **Note:** The `DeviceType` _isn't_ `rock64`, but this this is a hack to have GoKrazy use a [DeviceConfig](https://github.com/gokrazy/internal/blob/c74b4e7749e8ab88b74bec2c3727288f43c47985/deviceconfig/config.go#L52-L62) that expects a uboot partition.
 
 - [x] **5.4** Create go.mod with local replace
 
@@ -226,21 +231,6 @@ Required kernel features:
   - Create empty ext4 perm partition
 
   > **Note:** Replace `/dev/diskX` with your actual SD card device.
-
-- [ ] **6.3** Write U-Boot manually
-
-  `gok overwrite` doesn't know about Rockchip U-Boot placement, so we write it manually:
-
-  ```bash
-  # Unmount first
-  diskutil unmountDisk /dev/diskX
-
-  # Write U-Boot at sector 64
-  sudo dd if=u-boot-rockchip.bin of=/dev/rdiskX seek=64 bs=512
-
-  # Sync
-  sync
-  ```
 
 ### 7. Test Boot
 
